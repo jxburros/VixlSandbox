@@ -89,8 +89,8 @@ pytest -n auto                        # pytest -m network also installs a real r
 python -m vixl_sandbox --browser      # run from source in your browser
 ```
 
-The **Windows app** workflow builds `VixlSandbox.exe` with PyInstaller (`packaging/vixl_sandbox.spec`) on every pull
-request and attaches it to the release when a `v*` tag is pushed. To build locally on Windows:
+The **Windows app** workflow builds `VixlSandbox.exe` with PyInstaller (`packaging/vixl_sandbox.spec`) on every push
+and pull request, and attaches it to the release when a `v*` tag is pushed. To build locally on Windows:
 
 ```bash
 pip install -e ".[build]"
