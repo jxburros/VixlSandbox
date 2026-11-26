@@ -1,0 +1,37 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # vixl-engine stands in for an installed Vixl version in the tests (its interpreter is registered as one).
+      - run: python -m pip install -e ".[dev]" vixl-engine
+      - run: ruff check src tests packaging
+      - run: pytest -q -n auto
+  real-install:
+    # Installs the newest Vixl release with the real uv (downloading Python) and talks to its MCP server.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: pytest -q -m network

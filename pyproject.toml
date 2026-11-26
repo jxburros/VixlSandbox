@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vixl-sandbox"
+dynamic = ["version"]
+description = "A desktop app that compares how AI models make graphics and documents with different Vixl versions and without Vixl."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "httpx>=0.28,<1",
+    "anthropic>=1.11,<2",
+    "mcp>=1.21.1,<2",
+    "Pillow>=11",
+    "pypdfium2>=4.30",
+    "uv>=0.5",
+    "keyring>=25",
+    "pywebview>=5.3; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-xdist>=3.6", "ruff>=0.12"]
+build = ["pyinstaller>=6.10"]
+
+[project.scripts]
+vixl-sandbox = "vixl_sandbox.__main__:main"
+
+[tool.hatch.version]
+path = "src/vixl_sandbox/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vixl_sandbox"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# The same rules as Vixl: BLE001 makes every broad ``except Exception`` say why (``# noqa: BLE001 - reason``).
+select = ["E4", "E7", "E9", "F", "BLE001", "I001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["BLE001"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not network'"
+markers = ["network: installs a real Vixl release from PyPI with uv (slow; run with -m network)"]
