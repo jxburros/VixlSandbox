@@ -144,13 +144,46 @@ def screenshot(source, width=None, height=None):
                    "--default-background-color=00000000", f"--screenshot={out}", source.as_uri()]
         if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() == 0:
             command.insert(1, "--no-sandbox")
-        try:
-            subprocess.run(command, capture_output=True, timeout=60, **NO_WINDOW)
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise PreviewError(f"the browser could not render {source.name}: {exc}") from None
-        if not out.is_file():
+        if not run_until_written(command, out, timeout=SCREENSHOT_TIMEOUT):
             raise PreviewError(f"the browser could not render {source.name}")
         return out.read_bytes()
+
+
+SCREENSHOT_TIMEOUT = 60
+
+
+def run_until_written(command, out, timeout):
+    """Run the browser until ``out`` has been written, then stop it. Headless Edge on Windows can write the
+    screenshot and then take a long time to exit, so waiting for it to exit would stall every preview."""
+    import time
+
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **NO_WINDOW)
+    except OSError:
+        return False
+    deadline, last_size, stable_since = time.monotonic() + timeout, -1, None
+    try:
+        while time.monotonic() < deadline:
+            exited = process.poll() is not None
+            size = out.stat().st_size if out.is_file() else -1
+            if size > 0 and size == last_size:
+                stable_since = stable_since or time.monotonic()
+                if exited or time.monotonic() - stable_since >= 0.3:
+                    return True
+            else:
+                stable_since = None
+            if exited and size <= 0:
+                return False
+            last_size = size
+            time.sleep(0.1)
+        return out.is_file() and out.stat().st_size > 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            try:
+                process.wait(10)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 def pdf_page(path, page=0):

@@ -68,6 +68,12 @@ def make_versions(home):
     return versions
 
 
+def done(lab, run_id, timeout=300):
+    """Wait for the run's current round; fail if it is still running (rounds on a busy CI machine can be slow)."""
+    lab.wait(run_id, timeout)
+    assert not lab.busy(run_id), f"the round did not finish within {timeout} s"
+
+
 def make_lab(tmp_path, chat_factory, keystore=None):
     return Lab(tmp_path / "results", make_versions(tmp_path / "home"), chat_factory=chat_factory,
                keystore=keystore if keystore is not None else MemoryKeys())
@@ -183,7 +189,7 @@ def lab(tmp_path):
 
 def test_a_run_drives_every_arm_in_its_own_session(lab):
     run_id = lab.start(spec(), SECRET)
-    lab.wait(run_id, 120)
+    done(lab, run_id)
     run = lab.store.run(run_id)
     assert run["status"] == "done"
     sessions = {s["arm"]: s for s in run["sessions"]}
@@ -253,7 +259,7 @@ def test_vision_off_sends_no_images(lab):
 
 def test_votes_judging_and_the_scoreboard(lab):
     run_id = lab.start(spec(repeats=2, arms=["code", VIXL_ARM]), SECRET)
-    lab.wait(run_id, 120)
+    done(lab, run_id)
     run = lab.store.run(run_id)
     winner = next(s["id"] for s in run["sessions"] if s["repeat"] == 0 and s["arm"] == VIXL_ARM)
     lab.store.vote(run_id, 1, 0, winner)
@@ -278,7 +284,7 @@ def test_a_failed_model_call_is_recorded_with_the_key_removed(tmp_path):
 
     lab = make_lab(tmp_path, factory(refuse))
     run_id = lab.start(spec(arms=["bare"]), SECRET)
-    lab.wait(run_id, 60)
+    done(lab, run_id)
     generation = lab.store.run(run_id)["sessions"][0]["generations"][0]
     assert generation["status"] == "failed" and "HTTP 401" in generation["error"]
     assert SECRET not in generation["error"]
@@ -286,7 +292,7 @@ def test_a_failed_model_call_is_recorded_with_the_key_removed(tmp_path):
 
 def test_turn_limit_and_cancel(lab):
     run_id = lab.start(spec(arms=[VIXL_ARM], max_turns=2), SECRET)
-    lab.wait(run_id, 120)
+    done(lab, run_id)
     assert lab.store.run(run_id)["sessions"][0]["generations"][0]["status"] == "turn limit"
     lab.cancel("later")
     assert lab.cancelled("later")
@@ -573,7 +579,7 @@ def test_other_hosts_are_refused(client):
 
 def test_run_through_the_api_and_files_are_sandboxed(client):
     run_id = client.post("/api/runs", json={**spec(arms=["code"]), "api_key": SECRET}).json()["run_id"]
-    client.lab.wait(run_id, 120)
+    done(client.lab, run_id)
     run = client.get(f"/api/runs/{run_id}").json()
     session = run["sessions"][0]
     assert session["status"] == "done" and "api_key" not in json.dumps(run["spec"])
@@ -605,7 +611,7 @@ def test_call_dataclass_defaults():
 # --- follow-up rounds -------------------------------------------------------------------------------------------
 
 def finished(lab, run_id):
-    lab.wait(run_id, 120)
+    done(lab, run_id)
     return lab.store.run(run_id)
 
 
@@ -687,10 +693,10 @@ def test_votes_and_judging_are_per_round(lab):
 
 def test_follow_up_through_the_api(client):
     run_id = client.post("/api/runs", json={**spec(arms=["bare"]), "api_key": SECRET}).json()["run_id"]
-    client.lab.wait(run_id, 60)
+    done(client.lab, run_id)
     assert client.post(f"/api/runs/{run_id}/rounds", json={"prompt": ""}).status_code == 400
     assert client.post(f"/api/runs/{run_id}/rounds", json={"prompt": "Blue."}).json() == {"round": 2}
-    client.lab.wait(run_id, 60)
+    done(client.lab, run_id)
     run = client.get(f"/api/runs/{run_id}").json()
     assert len(run["rounds"]) == 2 and run["busy"] is False
     session = run["sessions"][0]
@@ -747,7 +753,7 @@ def test_export_through_the_api_lands_in_the_exports_folder(client):
     import zipfile
 
     run_id = client.post("/api/runs", json={**spec(arms=["bare"]), "api_key": SECRET}).json()["run_id"]
-    client.lab.wait(run_id, 60)
+    done(client.lab, run_id)
     first = client.post("/api/export", json={"runs": [run_id]}).json()
     second = client.post("/api/export", json={"runs": [run_id]}).json()
     assert Path(first["path"]).parent == client.exports and first["path"] != second["path"]
@@ -766,7 +772,7 @@ def test_export_through_the_api_lands_in_the_exports_folder(client):
 
 def test_generated_files_open_with_the_computers_own_app(client):
     run_id = client.post("/api/runs", json={**spec(arms=["bare"]), "api_key": SECRET}).json()["run_id"]
-    client.lab.wait(run_id, 60)
+    done(client.lab, run_id)
     session = client.get(f"/api/runs/{run_id}").json()["sessions"][0]["id"]
     reply = client.post("/api/open", json={"run": run_id, "session": session, "round": 1, "path": "poster.svg"})
     assert reply.status_code == 200 and client.opened[-1][0].name == "poster.svg"
@@ -807,3 +813,23 @@ def test_export_leaves_no_handle_open_on_its_temporary_file(lab):
         assert held == []
     finally:
         path.unlink()
+
+
+def test_a_browser_that_lingers_after_its_screenshot_does_not_stall_the_preview(tmp_path):
+    """Headless Edge on Windows can write the screenshot and then take a long time to exit."""
+    import time
+
+    out = tmp_path / "shot.png"
+    lingering = ("import sys, time; from PIL import Image; Image.new('RGB', (4, 4), 'red').save(sys.argv[1]); "
+                 "time.sleep(30)")
+    started = time.monotonic()
+    assert previews.run_until_written([sys.executable, "-c", lingering, str(out)], out, timeout=60)
+    assert time.monotonic() - started < 15 and out.stat().st_size > 0
+
+
+def test_a_browser_that_writes_nothing_fails_without_waiting_for_the_timeout(tmp_path):
+    import time
+
+    started = time.monotonic()
+    assert not previews.run_until_written([sys.executable, "-c", "pass"], tmp_path / "none.png", timeout=60)
+    assert time.monotonic() - started < 15
